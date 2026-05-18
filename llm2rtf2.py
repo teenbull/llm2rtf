@@ -1,3 +1,12 @@
+"""
+llm2rtf - Конвертер LaTeX/Markdown в RTF.
+Философия: Код должен быть простым, быстрым и без зависимостей (Tsoding-style).
+Главный трюк (v2.0): Мы используем нативные поля уравнений Microsoft Word (EQ fields). 
+Вместо построения сложных деревьев (AST), мы парсим математику "изнутри-наружу": 
+регулярные выражения сворачивают самые глубокие формулы в промежуточные маркеры \x01...\x02, 
+сбрасывая внутренние маркеры "на лету". В конце все это превращается в один общий 
+EQ field для всего блока. Это защищает от крашей Word'а и делает код компактным.
+"""
 import re
 import sys
 import os
@@ -47,6 +56,7 @@ def clean_math_text(text):
     text = re.sub(r'\\q?quad\b', ' ', text)
 
     # Обработка матриц и систем уравнений "изнутри наружу"
+    sep = get_list_separator()
     prev_text = None
     while text != prev_text:
         prev_text = text
@@ -54,17 +64,17 @@ def clean_math_text(text):
             env, content = m.group(1), m.group(2)
             content = content.strip()
             if 'matrix' in env:
-                # В матрицах переносы строк заменяем на разделитель |
-                content = re.sub(r'\\\\(?:\s*\n)?', ' | ', content)
-                return f"[{content.replace('&', ' ')}]"
+                # Создаем матрицу EQ \a. Считаем колонки по первой строке
+                cols = content.split(r'\\')[0].count('&') + 1
+                items = [c.strip() for c in re.split(r'\\\\|&', content)]
+                return f"\x01\\b\\bc\[(\\a\\ac\\co{cols}(" + sep.join(items) + "))\x02"
             elif 'cases' in env:
-                # Системы уравнений сохраняют переносы строк
-                content = re.sub(r'\\\\(?:\s*\n)?', '\n', content)
-                return f"{{ {content.replace('&', ' ')}"
+                # Системы уравнений объединяем одной левой скобкой (\lc\{)
+                items = [c.strip() for c in re.split(r'\\\\', content)]
+                return f"\x01\\b\\lc\{{(\\a\\al\\co1(" + sep.join(items) + "))\x02"
             else:
                 # align, equation - просто убираем окружение
-                content = re.sub(r'\\\\(?:\s*\n)?', '\n', content)
-                return content.replace('&', ' ')
+                return re.sub(r'\\\\(?:\s*\n)?', '\n', content).replace('&', ' ')
         # Ищем самые глубокие блоки (без \begin внутри), чтобы матрицы внутри align обрабатывались первыми
         text = re.sub(r'\\begin\{([a-zA-Z*]+)\}((?:(?!\\begin\{).)*?)\\end\{\1\}', env_replacer, text, flags=re.DOTALL)
 
@@ -125,6 +135,10 @@ def clean_math_text(text):
     # Удаление служебных директив, мешающих парсингу
     text = re.sub(r'\\(?:limits|displaystyle)\b\s*', '', text)
 
+    # Убираем лишние пробелы вокруг знаков умножения (по просьбе UI)
+    text = re.sub(r'\s*⋅\s*', '⋅', text)
+    text = re.sub(r'\s*×\s*', '×', text)
+
     return text.strip()
 
 def generate_rtf(text):
@@ -152,23 +166,53 @@ def generate_rtf(text):
     escaped = re.sub(r'\*\*(.*?)\*\*', r'\\b \1\\b0 ', escaped)
     escaped = re.sub(r'\*(.*?)\*', r'\\i \1\\i0 ', escaped)
 
-    # 3. Нативные поля EQ (дроби, корни) и RTF степени (универсальная вложенность изнутри-наружу)
+        # 3. Парсинг математики (дроби, корни) изнутри-наружу через маркеры \x01 \x02
+    # Идея (трюк): вместо создания вложенных RTF полей {\field...}, мы сворачиваем
+    # внутренние формулы в \f(a;b) и удаляем у них маркеры, собирая всё в один общий EQ field.
     sep = get_list_separator()
-    nb = r'(?:(?!\\\\[\[\{\}\]]).)*?'  # Контент без экранированных скобок \{, \} и \[
+    nb = r'(?:(?!\\[{}]).)*?'  # Жестко запрещаем экранированные скобки \{ и \} внутри аргументов
+    
+    def strip_m(s): return s.replace('\x01', '').replace('\x02', '')
+
     prev = None
     while escaped != prev:
         prev = escaped
-        escaped = re.sub(r'\\\\frac\s*\\\{(' + nb + r')\\\}\s*\\\{(' + nb + r')\\\}', r'{\\field{\\*\\fldinst EQ \\\\f(\1' + sep + r'\2)}{\\fldrslt}}', escaped)
-        escaped = re.sub(r'\\\\sqrt\s*\[(' + nb + r')\]\s*\\\{(' + nb + r')\\\}', r'{\\field{\\*\\fldinst EQ \\\\r(\1' + sep + r'\2)}{\\fldrslt}}', escaped)
-        escaped = re.sub(r'\\\\sqrt\s*\\\{(' + nb + r')\\\}', r'{\\field{\\*\\fldinst EQ \\\\r(' + sep + r'\1)}{\\fldrslt}}', escaped)
+        # Дроби \frac{A}{B} -> \x01\f(A;B)\x02
+        escaped = re.sub(r'\\\\frac\s*\\\{(' + nb + r')\\\}\s*\\\{(' + nb + r')\\\}', 
+                         lambda m: f"\x01\\\\f({strip_m(m.group(1))}{sep}{strip_m(m.group(2))})\x02", 
+                         escaped)
+        # Корни с индексом \sqrt[A]{B}
+        escaped = re.sub(r'\\\\sqrt\s*\[(' + nb + r')\]\s*\\\{(' + nb + r')\\\}', 
+                         lambda m: f"\x01\\\\r({strip_m(m.group(1))}{sep}{strip_m(m.group(2))})\x02", 
+                         escaped)
+        # Обычные корни \sqrt{A}
+        escaped = re.sub(r'\\\\sqrt\s*\\\{(' + nb + r')\\\}', 
+                         lambda m: f"\x01\\\\r({sep}{strip_m(m.group(1))})\x02", 
+                         escaped)
+        # Степени и индексы (RTF форматирование работает прямо внутри EQ полей!)
         escaped = re.sub(r'\^\s*\\\{(' + nb + r')\\\}', r'{\\super \1}', escaped)
         escaped = re.sub(r'_\s*\\\{(' + nb + r')\\\}', r'{\\sub \1}', escaped)
+        # Очистка шрифтовых тегов
         escaped = re.sub(r'\\\\(?:mathrm|text)\s*\\\{(' + nb + r')\\\}', r'\1', escaped)
         escaped = re.sub(r'\\\\(?:mathbf|textbf)\s*\\\{(' + nb + r')\\\}', r'\\b \1\\b0 ', escaped)
-        escaped = re.sub(r'\\\{(' + nb + r')\\\}', r'\1', escaped) # Снимаем группирующие скобки
         
+    # Если маркеры вложены (например, дробь внутри матрицы), снимаем внутренние,
+    # чтобы не спровоцировать ошибку вложенных EQ полей в Word
+    while re.search(r'\x01[^\x02]*\x01', escaped):
+        escaped = re.sub(r'(\x01[^\x01\x02]*)\x01([^\x02]*)\x02', r'\1\2', escaped)
+        
+    # Превращаем маркеры в полноценные поля EQ
+    escaped = escaped.replace('\x01', r'{\field{\*\fldinst EQ ').replace('\x02', r'}{\fldrslt}}')
+
     # 4. Формулы $...$ превращаем в курсив
     escaped = re.sub(r'\$+(.*?)\$+', r'\\i \1\\i0 ', escaped)
+
+    # 5. Убираем оставшиеся "бесхозные" фигурные скобки (например, от \sin{\beta})
+    # Делаем это только в самом конце, чтобы не сломать парсинг вложенных структур!
+    prev = None
+    while escaped != prev:
+        prev = escaped
+        escaped = re.sub(r'\\\{(' + nb + r')\\\}', r'\1', escaped)
 
     # 3. Таблицы Markdown
     def rtf_table_replacer(match):
