@@ -32,13 +32,34 @@ def clean_math_text(text):
     # 0. Убиваем скрытые Windows-переносы каретки (\r)
     text = text.replace('\r', '')
 
-    # 1. Очистка от визуального мусора LaTeX
+    # 1. Очистка от визуального мусора LaTeX и форматирование блоков
     text = re.sub(r'\\(?:left|right)\b\s*', '', text)
-    text = re.sub(r'\\(?:begin|end)\{[^}]+\}', '', text)
     text = re.sub(r'\\q?quad\b', ' ', text)
 
-    text = re.sub(r'\\\\(?:\s*\n)?', '\n', text) # Переносы строк в матрицах (схлопываем двойные переносы)
-    text = text.replace('&', ' ')                   # Разделители колонок в матрицах
+    # Обработка матриц и систем уравнений "изнутри наружу"
+    prev_text = None
+    while text != prev_text:
+        prev_text = text
+        def env_replacer(m):
+            env, content = m.group(1), m.group(2)
+            if 'matrix' in env:
+                # В матрицах переносы строк заменяем на разделитель |
+                content = re.sub(r'\\\\(?:\s*\n)?', ' | ', content)
+                return f"[{content.replace('&', ' ').strip()}]"
+            elif 'cases' in env:
+                # Системы уравнений сохраняют переносы строк
+                content = re.sub(r'\\\\(?:\s*\n)?', '\n', content)
+                return f"{{ {content.replace('&', ' ').strip()}"
+            else:
+                # align, equation - просто убираем окружение
+                content = re.sub(r'\\\\(?:\s*\n)?', '\n', content)
+                return content.replace('&', ' ').strip()
+        text = re.sub(r'\\begin\{([a-zA-Z*]+)\}(.*?)\\end\{\1\}', env_replacer, text, flags=re.DOTALL)
+
+    # Добиваем оставшийся мусор
+    text = re.sub(r'\\(?:begin|end)\{[^}]+\}', '', text)
+    text = re.sub(r'\\\\(?:\s*\n)?', '\n', text)
+    text = text.replace('&', ' ')
 
     # Снимаем экранирование с %, $, _ которые LLM ставит для Markdown
     text = re.sub(r'\\([%$_])', r'\1', text)
@@ -88,14 +109,14 @@ def clean_math_text(text):
     subscript_map   = str.maketrans("0123456789+-=()", "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎")
     
     # Сначала пытаемся перевести в красивые Unicode-индексы
-    text = re.sub(r'\^\{([0-9+\-=()]+)\}', lambda m: m.group(1).translate(superscript_map), text)
-    text = re.sub(r'_\{([0-9+\-=()]+)\}', lambda m: m.group(1).translate(subscript_map), text)
+    text = re.sub(r'\^\s*\{([0-9+\-=()]+)\}', lambda m: m.group(1).translate(superscript_map), text)
+    text = re.sub(r'_\s*\{([0-9+\-=()]+)\}', lambda m: m.group(1).translate(subscript_map), text)
     text = re.sub(r'\^([0-9])', lambda m: m.group(1).translate(superscript_map), text)
     text = re.sub(r'_([0-9])', lambda m: m.group(1).translate(subscript_map), text)
     
     # Для сложных выражений (буквы и пр.) делаем fallback-скобки: e^{x^2} -> e^(x²), S_n -> S_(n)
-    text = re.sub(r'\^\{([^{}]+)\}', r'^(\1)', text)
-    text = re.sub(r'_\{([^{}]+)\}', r'_(\1)', text)
+    text = re.sub(r'\^\s*\{([^{}]+)\}', r'^(\1)', text)
+    text = re.sub(r'_\s*\{([^{}]+)\}', r'_(\1)', text)
     
     # Для одиночных символов (в т.ч. греческих): ^x -> ^(x), _α -> _(α)
     text = re.sub(r'\^(\w)', r'^(\1)', text)
@@ -131,9 +152,9 @@ def clean_math_text(text):
     # --- конец блока ---
 
     # 7. Убираем лишние скобки вокруг "атомарных" выражений (числа, переменные, корни).
-    # Не удаляем скобки, если внутри есть умножение/минус, либо если ПЕРЕД скобкой стоит буква/цифра/подчеркивание
-    # (чтобы безопасно сохранить вызовы функций и аргументы f(x), cos(60°)).
-    text = re.sub(r'(?<![a-zA-Z0-9_А-Яа-я])\(([A-Za-z0-9А-Яа-яα-ωΑ-Ω√⁰¹²³⁴⁵⁶⁷⁸⁹°.,]+)\)', r'\1', text)
+    # Не удаляем скобки, если внутри есть умножение/минус, либо если ПЕРЕД скобкой стоит буква/цифра/подчеркивание/галочка
+    # (чтобы безопасно сохранить вызовы функций f(x) и защитить степени ^(b)).
+    text = re.sub(r'(?<![a-zA-Z0-9_А-Яа-я\^])\(([A-Za-z0-9А-Яа-яα-ωΑ-Ω√⁰¹²³⁴⁵⁶⁷⁸⁹°.,]+)\)', r'\1', text)
 
     # 8. Формулы $...$ превращаем в Markdown-курсив *...*
     text = re.sub(r'\$(.*?)\$', r'*\1*', text)
@@ -168,9 +189,12 @@ def generate_rtf(text):
     escaped = re.sub(r'\*\*(.*?)\*\*', r'\\b \1\\b0 ', escaped)
     escaped = re.sub(r'\*(.*?)\*', r'\\i \1\\i0 ', escaped)
 
-    # Нативные RTF степени и индексы. Regex поддерживает 1 уровень вложенных скобок `^(sin(x))`
-    escaped = re.sub(r'\^\(([^()]*\([^()]*\)[^()]*|[^()]+)\)', r'{\\super \1}', escaped)
-    escaped = re.sub(r'_\(([^()]*\([^()]*\)[^()]*|[^()]+)\)', r'{\\sub \1}', escaped)
+    # Нативные RTF степени и индексы (универсальная вложенность изнутри-наружу)
+    prev = None
+    while escaped != prev:
+        prev = escaped
+        escaped = re.sub(r'\^\(([^()]+)\)', r'{\\super \1}', escaped)
+        escaped = re.sub(r'_\(([^()]+)\)', r'{\\sub \1}', escaped)
 
     # 3. Таблицы Markdown
     def rtf_table_replacer(match):
