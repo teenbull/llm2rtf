@@ -67,11 +67,11 @@ def clean_math_text(text):
                 # Создаем матрицу EQ \a. Считаем колонки по первой строке
                 cols = content.split(r'\\')[0].count('&') + 1
                 items = [c.strip() for c in re.split(r'\\\\|&', content)]
-                return f"\x01\\b\\bc\[(\\a\\ac\\co{cols}(" + sep.join(items) + "))\x02"
+                return f"\x01\\b\\bc\\[(\\a\\ac\\co{cols}(" + sep.join(items) + "))\x02"
             elif 'cases' in env:
                 # Системы уравнений объединяем одной левой скобкой (\lc\{)
                 items = [c.strip() for c in re.split(r'\\\\', content)]
-                return f"\x01\\b\\lc\{{(\\a\\al\\co1(" + sep.join(items) + "))\x02"
+                return f"\x01\\b\\lc\\{{(\\a\\al\\co1(" + sep.join(items) + "))\x02"
             else:
                 # align, equation - просто убираем окружение
                 return re.sub(r'\\\\(?:\s*\n)?', '\n', content).replace('&', ' ')
@@ -123,7 +123,17 @@ def clean_math_text(text):
     text = re.sub(r'\^\{?(?:\\?circ|°)\}?', '°', text)
     text = re.sub(r'(\d+)\^([^\w\d]|$)', r'\1°\2', text)
     
-    # Приводим индексы к формату ^{x} для последующего парсинга в RTF
+    # Умный трюк: переводим простые числа в степенях в Unicode.
+    # Это решает баг вложенности (e^{x^2}), так как RTF не умеет делать двойной \super.
+    # Букву 'n' мы исключили из конвертации, чтобы не получить 'квадратики' в Word (шрифты плохо поддерживают ₙ)
+    sup_map = str.maketrans("0123456789+-=()", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾")
+    sub_map = str.maketrans("0123456789+-=()", "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎")
+    text = re.sub(r'\^\{([0-9+\-=()]+)\}', lambda m: m.group(1).translate(sup_map), text)
+    text = re.sub(r'_\{([0-9+\-=()]+)\}', lambda m: m.group(1).translate(sub_map), text)
+    text = re.sub(r'\^([0-9])', lambda m: m.group(1).translate(sup_map), text)
+    text = re.sub(r'_([0-9])', lambda m: m.group(1).translate(sub_map), text)
+
+    # Приводим оставшиеся индексы (переменные) к формату ^{x} для парсинга в RTF
     text = re.sub(r'\^([a-zA-Z0-9А-Яа-яα-ωΑ-Ω∞°])', r'^{\1}', text)
     text = re.sub(r'_([a-zA-Z0-9А-Яа-яα-ωΑ-Ω∞°])', r'_{\1}', text)
 
@@ -252,8 +262,8 @@ def generate_rtf(text):
     # 4. Переносы строк
     escaped = escaped.replace('\n', r' \par ' + '\n')
 
-    # Заголовок RTF (Times / Arial 12pt)
-    rtf_header = r"{\rtf1\ansi\ansicpg1251\uc1\f0\fs24 "
+    # Заголовок RTF с таблицей шрифтов (защита от кракозябр в старых Word)
+    rtf_header = r"{\rtf1\ansi\ansicpg1251\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Arial;}}\uc1\f0\fs24 "
     return rtf_header + "\n" + escaped + "\n}"
 
 def set_clipboard(plain_text, rtf_text):
