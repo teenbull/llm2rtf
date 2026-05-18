@@ -123,17 +123,9 @@ def clean_math_text(text):
     text = re.sub(r'\^\{?(?:\\?circ|°)\}?', '°', text)
     text = re.sub(r'(\d+)\^([^\w\d]|$)', r'\1°\2', text)
     
-    # Умный трюк: переводим простые числа в степенях в Unicode.
-    # Это решает баг вложенности (e^{x^2}), так как RTF не умеет делать двойной \super.
-    # Букву 'n' мы исключили из конвертации, чтобы не получить 'квадратики' в Word (шрифты плохо поддерживают ₙ)
-    sup_map = str.maketrans("0123456789+-=()", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾")
-    sub_map = str.maketrans("0123456789+-=()", "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎")
-    text = re.sub(r'\^\{([0-9+\-=()]+)\}', lambda m: m.group(1).translate(sup_map), text)
-    text = re.sub(r'_\{([0-9+\-=()]+)\}', lambda m: m.group(1).translate(sub_map), text)
-    text = re.sub(r'\^([0-9])', lambda m: m.group(1).translate(sup_map), text)
-    text = re.sub(r'_([0-9])', lambda m: m.group(1).translate(sub_map), text)
-
-    # Приводим оставшиеся индексы (переменные) к формату ^{x} для парсинга в RTF
+    # Приводим индексы к единому формату ^{x} для последующего парсинга
+    # (перевод простых цифр в Unicode мы теперь делаем в генераторе RTF, 
+    # чтобы не ломать парсинг пределов для интегралов и сумм)
     text = re.sub(r'\^([a-zA-Z0-9А-Яа-яα-ωΑ-Ω∞°])', r'^{\1}', text)
     text = re.sub(r'_([a-zA-Z0-9А-Яа-яα-ωΑ-Ω∞°])', r'_{\1}', text)
 
