@@ -37,32 +37,44 @@ def clean_math_text(text):
     text = re.sub(r'\\(?:begin|end)\{[^}]+\}', '', text)
     text = re.sub(r'\\q?quad\b', ' ', text)
 
-    # Снимаем экранирование с %, $, & и _, которые LLM ставит для Markdown
-    text = re.sub(r'\\([%$&_])', r'\1', text)
+    text = re.sub(r'\\\\(?:\s*\n)?', '\n', text) # Переносы строк в матрицах (схлопываем двойные переносы)
+    text = text.replace('&', ' ')                   # Разделители колонок в матрицах
+
+    # Снимаем экранирование с %, $, _ которые LLM ставит для Markdown
+    text = re.sub(r'\\([%$_])', r'\1', text)
 
     # 2. Словарь констант и символов
     replacements = {
-        # Греческие буквы
-        r'\\?alpha\b': 'α', r'\\?beta\b': 'β', r'\\?gamma\b': 'γ', r'\\?delta\b': 'δ', r'\\?epsilon\b': 'ε',
-        r'\\?Delta\b': 'Δ', r'\\?Gamma\b': 'Γ', r'\\?Theta\b': 'Θ', r'\\?Lambda\b': 'Λ', r'\\?Pi\b': 'Π', r'\\?pi\b': 'π',
+        # Греческие буквы (добавлены недостающие)
+        r'alpha': 'α', r'beta': 'β', r'gamma': 'γ', r'delta': 'δ', r'epsilon': 'ε',
+        r'zeta': 'ζ', r'eta': 'η', r'theta': 'θ', r'iota': 'ι', r'kappa': 'κ', r'lambda': 'λ',
+        r'mu': 'μ', r'nu': 'ν', r'xi': 'ξ', r'rho': 'ρ', r'sigma': 'σ', r'tau': 'τ',
+        r'upsilon': 'υ', r'phi': 'φ', r'chi': 'χ', r'psi': 'ψ', r'omega': 'ω',
+        r'Delta': 'Δ', r'Gamma': 'Γ', r'Theta': 'Θ', r'Lambda': 'Λ', r'Xi': 'Ξ',
+        r'Pi': 'Π', r'pi': 'π', r'Sigma': 'Σ', r'Phi': 'Φ', r'Psi': 'Ψ', r'Omega': 'Ω',
+        # Базовые дроби
+        r'frac\{1\}\{2\}': '½', r'frac\{1\}\{3\}': '⅓', r'frac\{2\}\{3\}': '⅔',
+        r'frac\{1\}\{4\}': '¼', r'frac\{3\}\{4\}': '¾', r'frac\{1\}\{5\}': '⅕',
         # Геометрия и стрелки
-        r'\\?triangle\b': '△', r'\\?angle\b': '∠', r'\\?perp\b': '⊥',
-        r'\\?Rightarrow\b': '⇒', r'\\?rightarrow\b': '→', r'\\?Leftarrow\b': '⇐', r'\\?Leftrightarrow\b': '⇔',
+        r'triangle': '△', r'angle': '∠', r'perp': '⊥',
+        r'Rightarrow': '⇒', r'rightarrow': '→', r'to': '→', r'Leftarrow': '⇐', r'Leftrightarrow': '⇔',
         # Операции
-        r'\\?cdot\b': '⋅', r'\\?times\b': '×', r'\\?div\b': '÷', r'\\?pm\b': '±', r'\\?mp\b': '∓',
+        r'cdot': '⋅', r'times': '×', r'div': '÷', r'pm': '±', r'mp': '∓',
         # Отношения и множества
-        r'\\?ge\b': '≥', r'\\?geq\b': '≥', r'\\?le\b': '≤', r'\\?leq\b': '≤', r'\\?neq\b': '≠', r'\\?equiv\b': '≡',
-        r'\\?approx\b': '≈', r'\\?in\b': '∈', r'\\?notin\b': '∉', r'\\?subset\b': '⊂', r'\\?cup\b': '∪', r'\\?cap\b': '∩',
-        r'\\?emptyset\b': '∅', r'\\?forall\b': '∀', r'\\?exists\b': '∃',
+        r'ge': '≥', r'geq': '≥', r'le': '≤', r'leq': '≤', r'neq': '≠', r'equiv': '≡',
+        r'approx': '≈', r'in': '∈', r'notin': '∉', r'subset': '⊂', r'cup': '∪', r'cap': '∩',
+        r'emptyset': '∅', r'forall': '∀', r'exists': '∃',
         # Матанализ и прочее
-        r'\\?infty\b': '∞', r'\\?circ\b': '°', r'\\?int\b': '∫', r'\\?sum\b': '∑', r'\\?prod\b': '∏',
+        r'infty': '∞', r'circ': '°', r'int': '∫', r'sum': '∑', r'prod': '∏',
         # Текстовые функции
-        r'\\?sin\b': 'sin', r'\\?cos\b': 'cos', r'\\?tan\b': 'tan', r'\\?cot\b': 'cot',
-        r'\\?arcsin\b': 'arcsin', r'\\?arccos\b': 'arccos', r'\\?arctan\b': 'arctan',
-        r'\\?ln\b': 'ln', r'\\?log\b': 'log', r'\\?lim\b': 'lim', r'\\?max\b': 'max', r'\\?min\b': 'min'
+        r'sin': 'sin', r'cos': 'cos', r'tan': 'tan', r'cot': 'cot',
+        r'arcsin': 'arcsin', r'arccos': 'arccos', r'arctan': 'arctan',
+        r'ln': 'ln', r'log': 'log', r'lim': 'lim', r'max': 'max', r'min': 'min'
     }
     for pattern, repl in replacements.items():
-        text = re.sub(pattern, repl, text)
+        # (?<![a-zA-Z]) защищает от замены внутри других слов (s\in -> s∈)
+        # (?![a-zA-Z]) разрешает замену, если дальше идет _, ^, ( - то есть не буква. Это чинит \int_a^b!
+        text = re.sub(rf'(?<![a-zA-Z])\\?{pattern}(?![a-zA-Z])', repl, text)
 
     # 3. Степени и градусы
     # ^\circ или ^{°} это обычный градус
@@ -70,12 +82,24 @@ def clean_math_text(text):
     # Исправление частой опечатки учеников/ИИ: "120^ " -> "120° "
     text = re.sub(r'(\d+)\^([^\w\d]|$)', r'\1°\2', text)
     
-    # Транслятор любых цифровых степеней в Unicode (x^2 -> x², 10^{12} -> 10¹²)
-    superscript_map = str.maketrans("0123456789+-=()n", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿ")
-    def super_replacer(match):
-        return match.group(1).translate(superscript_map)
-    text = re.sub(r'\^\{([0-9+\-=()n]+)\}', super_replacer, text) # Для ^{12}
-    text = re.sub(r'\^([0-9n])', super_replacer, text)            # Для ^2
+    # Транслятор цифровых степеней и индексов в Unicode
+    # Убрали буквы (n, i, j, k), так как их Unicode-индексы часто не поддерживаются в шрифтах (выдают квадраты)
+    superscript_map = str.maketrans("0123456789+-=()", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾")
+    subscript_map   = str.maketrans("0123456789+-=()", "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎")
+    
+    # Сначала пытаемся перевести в красивые Unicode-индексы
+    text = re.sub(r'\^\{([0-9+\-=()]+)\}', lambda m: m.group(1).translate(superscript_map), text)
+    text = re.sub(r'_\{([0-9+\-=()]+)\}', lambda m: m.group(1).translate(subscript_map), text)
+    text = re.sub(r'\^([0-9])', lambda m: m.group(1).translate(superscript_map), text)
+    text = re.sub(r'_([0-9])', lambda m: m.group(1).translate(subscript_map), text)
+    
+    # Для сложных выражений (буквы и пр.) делаем fallback-скобки: e^{x^2} -> e^(x²), S_n -> S_(n)
+    text = re.sub(r'\^\{([^{}]+)\}', r'^(\1)', text)
+    text = re.sub(r'_\{([^{}]+)\}', r'_(\1)', text)
+    
+    # Для одиночных символов (в т.ч. греческих): ^x -> ^(x), _α -> _(α)
+    text = re.sub(r'\^(\w)', r'^(\1)', text)
+    text = re.sub(r'_(\w)', r'_(\1)', text)
 
     # --- Начало блока "изнутри наружу" ---
     # Общий цикл для парсинга вложенных структур.
@@ -107,10 +131,9 @@ def clean_math_text(text):
     # --- конец блока ---
 
     # 7. Убираем лишние скобки вокруг "атомарных" выражений (числа, переменные, корни).
-    # Не удаляем скобки, если внутри есть умножение или минус, 
-    # так как это может изменить приоритет операций при делении.
-    # Безопасно удаляем для: корней, степеней, десятичных дробей и градусов.
-    text = re.sub(r'\(([A-Za-z0-9А-Яа-яα-ωΑ-Ω√⁰¹²³⁴⁵⁶⁷⁸⁹°.,]+)\)', r'\1', text)
+    # Не удаляем скобки, если внутри есть умножение/минус, либо если ПЕРЕД скобкой стоит буква/цифра/подчеркивание
+    # (чтобы безопасно сохранить вызовы функций и аргументы f(x), cos(60°)).
+    text = re.sub(r'(?<![a-zA-Z0-9_А-Яа-я])\(([A-Za-z0-9А-Яа-яα-ωΑ-Ω√⁰¹²³⁴⁵⁶⁷⁸⁹°.,]+)\)', r'\1', text)
 
     # 8. Формулы $...$ превращаем в Markdown-курсив *...*
     text = re.sub(r'\$(.*?)\$', r'*\1*', text)
@@ -144,6 +167,10 @@ def generate_rtf(text):
     # 2. Жирный шрифт и курсив
     escaped = re.sub(r'\*\*(.*?)\*\*', r'\\b \1\\b0 ', escaped)
     escaped = re.sub(r'\*(.*?)\*', r'\\i \1\\i0 ', escaped)
+
+    # Нативные RTF степени и индексы. Regex поддерживает 1 уровень вложенных скобок `^(sin(x))`
+    escaped = re.sub(r'\^\(([^()]*\([^()]*\)[^()]*|[^()]+)\)', r'{\\super \1}', escaped)
+    escaped = re.sub(r'_\(([^()]*\([^()]*\)[^()]*|[^()]+)\)', r'{\\sub \1}', escaped)
 
     # 3. Таблицы Markdown
     def rtf_table_replacer(match):
