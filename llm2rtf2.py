@@ -22,6 +22,8 @@ def get_list_separator():
         except Exception: pass
     return ";"
 
+LIST_SEP = get_list_separator()
+
 def get_clipboard_text():
     if sys.platform == "win32":
         import ctypes
@@ -52,11 +54,10 @@ def clean_math_text(text):
     text = text.replace('\r', '')
 
     # 1. Очистка от визуального мусора LaTeX и форматирование блоков
-    text = re.sub(r'\\(?:left|right)\b\s*', '', text)
+    text = re.sub(r'\\(?:left|right)(?![a-zA-Z])\.?\s*', '', text)
     text = re.sub(r'\\q?quad\b', ' ', text)
 
     # Обработка матриц и систем уравнений "изнутри наружу"
-    sep = get_list_separator()
     prev_text = None
     while text != prev_text:
         prev_text = text
@@ -67,14 +68,14 @@ def clean_math_text(text):
                 # Создаем матрицу EQ \a. Считаем колонки по первой строке
                 cols = content.split(r'\\')[0].count('&') + 1
                 items = [c.strip() for c in re.split(r'\\\\|&', content)]
-                return f"\x01\\b\\bc\\[(\\a\\ac\\co{cols}(" + sep.join(items) + "))\x02"
+                return f"\x01\\b\\bc\\[(\\a\\ac\\co{cols}(" + LIST_SEP.join(items) + "))\x02"
             elif 'cases' in env:
                 # Системы уравнений объединяем одной левой скобкой (\lc\{)
                 items = [c.strip() for c in re.split(r'\\\\', content)]
-                return f"\x01\\b\\lc\\{{(\\a\\al\\co1(" + sep.join(items) + "))\x02"
+                return f"\x01\\b\\lc\\{{(\\a\\al\\co1(" + LIST_SEP.join(items) + "))\x02"
             else:
                 # align, equation - просто убираем окружение
-                return re.sub(r'\\\\(?:\s*\n)?', '\n', content).replace('&', ' ')
+                return content
         # Ищем самые глубокие блоки (без \begin внутри), чтобы матрицы внутри align обрабатывались первыми
         text = re.sub(r'\\begin\{([a-zA-Z*]+)\}((?:(?!\\begin\{).)*?)\\end\{\1\}', env_replacer, text, flags=re.DOTALL)
 
@@ -171,7 +172,6 @@ def generate_rtf(text):
         # 3. Парсинг математики (дроби, корни) изнутри-наружу через маркеры \x01 \x02
     # Идея (трюк): вместо создания вложенных RTF полей {\field...}, мы сворачиваем
     # внутренние формулы в \f(a;b) и удаляем у них маркеры, собирая всё в один общий EQ field.
-    sep = get_list_separator()
     nb = r'(?:(?!\\[{}]).)*?'  # Жестко запрещаем экранированные скобки \{ и \} внутри аргументов
     
     def strip_m(s): return s.replace('\x01', '').replace('\x02', '')
@@ -181,15 +181,15 @@ def generate_rtf(text):
         prev = escaped
         # Дроби \frac{A}{B} -> \x01\f(A;B)\x02
         escaped = re.sub(r'\\\\frac\s*\\\{(' + nb + r')\\\}\s*\\\{(' + nb + r')\\\}', 
-                         lambda m: f"\x01\\\\f({strip_m(m.group(1))}{sep}{strip_m(m.group(2))})\x02", 
+                         lambda m: f"\x01\\\\f({strip_m(m.group(1))}{LIST_SEP}{strip_m(m.group(2))})\x02", 
                          escaped)
         # Корни с индексом \sqrt[A]{B}
         escaped = re.sub(r'\\\\sqrt\s*\[(' + nb + r')\]\s*\\\{(' + nb + r')\\\}', 
-                         lambda m: f"\x01\\\\r({strip_m(m.group(1))}{sep}{strip_m(m.group(2))})\x02", 
+                         lambda m: f"\x01\\\\r({strip_m(m.group(1))}{LIST_SEP}{strip_m(m.group(2))})\x02", 
                          escaped)
         # Обычные корни \sqrt{A}
         escaped = re.sub(r'\\\\sqrt\s*\\\{(' + nb + r')\\\}', 
-                         lambda m: f"\x01\\\\r({sep}{strip_m(m.group(1))})\x02", 
+                         lambda m: f"\x01\\\\r({LIST_SEP}{strip_m(m.group(1))})\x02", 
                          escaped)
         # Степени и индексы (RTF форматирование работает прямо внутри EQ полей!)
         escaped = re.sub(r'\^\s*\\\{(' + nb + r')\\\}', r'{\\super \1}', escaped)
@@ -285,22 +285,28 @@ def set_clipboard(plain_text, rtf_text):
         user32.SetClipboardData(CF_UNICODETEXT, hGlobalPlain)
 
         user32.CloseClipboard()
+    elif sys.platform == "darwin":
+        # Нативный AppleScript хак: кладем RTF и Plain Text прямо в буфер macOS
+        hex_rtf = rtf_text.encode('ascii').hex().upper()
+        escaped_plain = plain_text.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '')
+        script = f'set the clipboard to {{text:"{escaped_plain}", «class RTF »:«data RTF {hex_rtf}»}}'
+        subprocess.run(['osascript', '-'], input=script, text=True)
     else:
-        # Fallback для Mac / Linux: кладем обычный текст в буфер через терминал
-        if sys.platform == "darwin":
-            subprocess.run(['pbcopy'], input=plain_text, text=True)
-        else:
-            for cmd in [['wl-copy'], ['xclip', '-selection', 'clipboard'], ['xsel', '--clipboard', '--input']]:
-                try:
-                    subprocess.run(cmd, input=plain_text, text=True)
-                    break
-                except FileNotFoundError: continue
+        # Пытаемся скопировать RTF в Linux. 
+        success = False
+        for cmd in [['wl-copy', '-t', 'text/rtf'], ['xclip', '-selection', 'clipboard', '-t', 'text/rtf', '-i']]:
+            try:
+                subprocess.run(cmd, input=rtf_text, text=True, check=True)
+                success = True
+                break
+            except (FileNotFoundError, subprocess.CalledProcessError): continue
         
-        # RTF открываем как файл, так как не все X11 менеджеры умеют держать RTF в буфере
-        filename = "converted_math.rtf"
-        with open(filename, 'w', encoding='ascii') as f:
-            f.write(rtf_text)
-        os.system(f'open "{filename}"' if sys.platform == "darwin" else f'xdg-open "{filename}"')
+        if not success:
+            # Fallback если нет xclip/wl-copy
+            filename = "converted_math.rtf"
+            with open(filename, 'w', encoding='ascii') as f:
+                f.write(rtf_text)
+            os.system(f'xdg-open "{filename}"')
 
 def main():
     raw_text = get_clipboard_text()
