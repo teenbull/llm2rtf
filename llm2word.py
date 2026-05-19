@@ -201,12 +201,18 @@ def generate_rtf(text):
     def make_int(op, lower, upper):
         # Функция-помощник: избавляет от ада бэкслешей и безопасно собирает EQ-поле.
         if op == 'int':
-            # Возвращаем нативный оператор Word \i\in, оформленный в шрифте Times New Roman (\f0).
-            # Это полностью восстанавливает нормальную высоту строки в абзаце и дает аккуратный 
-            # наклонный интеграл с идеально выровненными индексами.
-            l_str = f"{lower}" if lower else ""
-            u_str = f"{upper}" if upper else ""
-            return f"{{\\f0\x01\\\\i\\\\in({l_str}{LIST_SEP}{u_str}{LIST_SEP}\\~)\x02}}"
+            # Выводим цельный символ интеграла как текст в Times New Roman (\f0\fs32) без лишнего переключателя \\i.
+            # Пределы верстаем рядом мелким шрифтом (\fs16) в компактный массив \a с интервалом \vs3.
+            l_str = f"{{\\fs16 {lower}}}" if lower else ""
+            u_str = f"{{\\fs16 {upper}}}" if upper else ""
+            if u_str and l_str:
+                return f"{{\\f0\\fs32\\u8747?}}\x01\\\\a\\\\co1\\\\al\\\\vs3({u_str}{LIST_SEP}{l_str})\x02"
+            elif u_str:
+                return f"{{\\f0\\fs32\\u8747?}}\x01\\\\s\\\\up6({u_str})\x02"
+            elif l_str:
+                return f"{{\\f0\\fs32\\u8747?}}\x01\\\\s\\\\do6({l_str})\x02"
+            else:
+                return f"{{\\f0\\fs32\\u8747?}}"
 
     prev = None
     while escaped != prev:
