@@ -109,7 +109,7 @@ def clean_math_text(text):
         r'approx': '≈', r'in': '∈', r'notin': '∉', r'subset': '⊂', r'cup': '∪', r'cap': '∩',
         r'emptyset': '∅', r'forall': '∀', r'exists': '∃',
         # Матанализ и прочее
-        r'infty': '∞', r'circ': '°', r'int': '∫', r'sum': '∑', r'prod': '∏',
+        r'infty': '∞', r'circ': '°',
         # Текстовые функции
         r'sin': 'sin', r'cos': 'cos', r'tan': 'tan', r'cot': 'cot',
         r'arcsin': 'arcsin', r'arccos': 'arccos', r'arctan': 'arctan',
@@ -173,30 +173,55 @@ def generate_rtf(text):
     # Идея (трюк): вместо создания вложенных RTF полей {\field...}, мы сворачиваем
     # внутренние формулы в \f(a;b) и удаляем у них маркеры, собирая всё в один общий EQ field.
     nb = r'(?:(?!\\[{}]).)*?'  # Жестко запрещаем экранированные скобки \{ и \} внутри аргументов
+    G = r'\\\{(' + nb + r')\\\}'
     
     def strip_m(s): return s.replace('\x01', '').replace('\x02', '')
+
+    def switch_i(op):
+        if op == 'sum': return r'\\su'
+        if op == 'prod': return r'\\pr'
+        return ''
 
     prev = None
     while escaped != prev:
         prev = escaped
         # Дроби \frac{A}{B} -> \x01\f(A;B)\x02
-        escaped = re.sub(r'\\\\frac\s*\\\{(' + nb + r')\\\}\s*\\\{(' + nb + r')\\\}', 
+        escaped = re.sub(r'\\\\frac\s*' + G + r'\s*' + G, 
                          lambda m: f"\x01\\\\f({strip_m(m.group(1))}{LIST_SEP}{strip_m(m.group(2))})\x02", 
                          escaped)
         # Корни с индексом \sqrt[A]{B}
-        escaped = re.sub(r'\\\\sqrt\s*\[(' + nb + r')\]\s*\\\{(' + nb + r')\\\}', 
+        escaped = re.sub(r'\\\\sqrt\s*\[(' + nb + r')\]\s*' + G, 
                          lambda m: f"\x01\\\\r({strip_m(m.group(1))}{LIST_SEP}{strip_m(m.group(2))})\x02", 
                          escaped)
         # Обычные корни \sqrt{A}
-        escaped = re.sub(r'\\\\sqrt\s*\\\{(' + nb + r')\\\}', 
+        escaped = re.sub(r'\\\\sqrt\s*' + G, 
                          lambda m: f"\x01\\\\r({LIST_SEP}{strip_m(m.group(1))})\x02", 
                          escaped)
-        # Степени и индексы (RTF форматирование работает прямо внутри EQ полей!)
-        escaped = re.sub(r'\^\s*\\\{(' + nb + r')\\\}', r'{\\super \1}', escaped)
-        escaped = re.sub(r'_\s*\\\{(' + nb + r')\\\}', r'{\\sub \1}', escaped)
+        
+        # Интегралы, суммы, произведения с пределами
+        escaped = re.sub(r'\\\\(int|sum|prod)\s*_\s*' + G + r'\s*\^\s*' + G,
+                         lambda m: f"\x01\\\\i{switch_i(m.group(1))}({strip_m(m.group(2))}{LIST_SEP}{strip_m(m.group(3))}{LIST_SEP})\x02", escaped)
+        escaped = re.sub(r'\\\\(int|sum|prod)\s*\^\s*' + G + r'\s*_\s*' + G,
+                         lambda m: f"\x01\\\\i{switch_i(m.group(1))}({strip_m(m.group(3))}{LIST_SEP}{strip_m(m.group(2))}{LIST_SEP})\x02", escaped)
+        escaped = re.sub(r'\\\\(int|sum|prod)\s*_\s*' + G,
+                         lambda m: f"\x01\\\\i{switch_i(m.group(1))}({strip_m(m.group(2))}{LIST_SEP}{LIST_SEP})\x02", escaped)
+
+        # Комбинированные индексы (и верх и низ одновременно)
+        escaped = re.sub(r'_\s*' + G + r'\s*\^\s*' + G,
+                         lambda m: f"\x01\\\\s({strip_m(m.group(2))}{LIST_SEP}{strip_m(m.group(1))})\x02", escaped)
+        escaped = re.sub(r'\^\s*' + G + r'\s*_\s*' + G,
+                         lambda m: f"\x01\\\\s({strip_m(m.group(1))}{LIST_SEP}{strip_m(m.group(2))})\x02", escaped)
+
+        # Одинарные степени и индексы (используем EQ \s\up5 вместо \super для защиты от схлопывания)
+        escaped = re.sub(r'\^\s*' + G, lambda m: f"\x01\\\\s\\\\up5({strip_m(m.group(1))})\x02", escaped)
+        escaped = re.sub(r'_\s*' + G, lambda m: f"\x01\\\\s\\\\do5({strip_m(m.group(1))})\x02", escaped)
+
         # Очистка шрифтовых тегов
-        escaped = re.sub(r'\\\\(?:mathrm|text)\s*\\\{(' + nb + r')\\\}', r'\1', escaped)
-        escaped = re.sub(r'\\\\(?:mathbf|textbf)\s*\\\{(' + nb + r')\\\}', r'\\b \1\\b0 ', escaped)
+        escaped = re.sub(r'\\\\(?:mathrm|text)\s*' + G, r'\1', escaped)
+        escaped = re.sub(r'\\\\(?:mathbf|textbf)\s*' + G, r'\\b \1\\b0 ', escaped)
+
+    # Восстанавливаем символы матанализа, которые остались без пределов (RTF Unicode)
+    escaped = escaped.replace(r'\\int', r'\u8747?').replace(r'\\sum', r'\u8721?').replace(r'\\prod', r'\u8719?')
         
     # Если маркеры вложены (например, дробь внутри матрицы), снимаем внутренние,
     # чтобы не спровоцировать ошибку вложенных EQ полей в Word
