@@ -79,10 +79,10 @@ def clean_math_text(text):
             env, content = m.group(1), m.group(2)
             content = content.strip()
             if 'matrix' in env:
-                # Создаем матрицу EQ \a. Считаем колонки по первой строке
+                # создаем матрицу EQ \a с отступами \vs3 и \hs3 для читаемости
                 cols = content.split(r'\\')[0].count('&') + 1
                 items = [c.strip() for c in re.split(r'\\\\|&', content)]
-                return f"\x01\\b\\bc\\[(\\a\\ac\\co{cols}(" + LIST_SEP.join(items) + "))\x02"
+                return f"\x01\\b\\bc\\[(\\a\\ac\\vs3\\hs3\\co{cols}(" + LIST_SEP.join(items) + "))\x02"
             elif 'cases' in env:
                 # Системы уравнений объединяем одной левой скобкой (\lc\{)
                 items = [c.strip() for c in re.split(r'\\\\', content)]
@@ -118,8 +118,8 @@ def clean_math_text(text):
         r'Rightarrow': '⇒', r'rightarrow': '→', r'Leftarrow': '⇐', r'Leftrightarrow': '⇔',
         # \to требует обязательного слеша, иначе "according to the" -> "according → the"
         r'to': '→',
-        # Операции
-        r'cdot': '⋅', r'times': '×', r'div': '÷', r'pm': '±', r'mp': '∓',
+        # Операции (cdot заменен на middle dot U+00B7 для правильного кернинга в Word)
+        r'cdot': '·', r'times': '×', r'div': '÷', r'pm': '±', r'mp': '∓',
         # Отношения и множества
         r'ge': '≥', r'geq': '≥', r'le': '≤', r'leq': '≤', r'neq': '≠', r'equiv': '≡',
         r'approx': '≈', r'in': '∈', r'notin': '∉', r'subset': '⊂', r'cup': '∪', r'cap': '∩',
@@ -159,8 +159,8 @@ def clean_math_text(text):
     # Удаление служебных директив, мешающих парсингу
     text = re.sub(r'\\(?:limits|displaystyle)\b\s*', '', text)
 
-    # Убираем лишние пробелы вокруг знаков умножения (по просьбе UI)
-    text = re.sub(r'\s*⋅\s*', '⋅', text)
+    # убираем лишние пробелы вокруг знаков умножения
+    text = re.sub(r'\s*·\s*', '·', text)
     text = re.sub(r'\s*×\s*', '×', text)
 
     return text.strip()
