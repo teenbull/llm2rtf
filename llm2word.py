@@ -159,7 +159,7 @@ def clean_math_text(text):
     # Удаление служебных директив, мешающих парсингу
     text = re.sub(r'\\(?:limits|displaystyle)\b\s*', '', text)
 
-    # убираем лишние пробелы вокруг знаков умножения
+    # Убираем лишние пробелы вокруг знаков умножения
     text = re.sub(r'\s*·\s*', '·', text)
     text = re.sub(r'\s*×\s*', '×', text)
 
@@ -198,10 +198,19 @@ def generate_rtf(text):
     
     def strip_m(s): return s.replace('\x01', '').replace('\x02', '')
 
-    def switch_i(op):
-        if op == 'sum': return r'\\su'
-        if op == 'prod': return r'\\pr'
-        return ''
+    def make_int(op, lower, upper, body):
+        # Функция-помощник: избавляет от ада бэкслешей и безопасно собирает EQ-поле.
+        cmd = r"\\i"
+        if op == 'sum': cmd += r"\\su"
+        elif op == 'prod': cmd += r"\\pr"
+        
+        # Оборачиваем пределы в RTF-группу со шрифтом 9 пунктов (\fs18).
+        # Двойные фигурные скобки {{ }} нужны для экранирования f-строки в Python.
+        l_str = f"{{\\fs18 {lower}}}" if lower else ""
+        u_str = f"{{\\fs18 {upper}}}" if upper else ""
+        body_str = body if body.strip() else " "
+        
+        return f"\x01{cmd}({l_str}{LIST_SEP}{u_str}{LIST_SEP}{body_str})\x02"
 
     prev = None
     while escaped != prev:
@@ -219,17 +228,22 @@ def generate_rtf(text):
                          lambda m: f"\x01\\\\r({LIST_SEP}{strip_m(m.group(1))})\x02", 
                          escaped)
         
-        # Интегралы, суммы, произведения с пределами (пробел в конце важен, чтобы символ не схлопнулся)
-        escaped = re.sub(r'\\\\(int|sum|prod)\s*_\s*' + G + r'\s*\^\s*' + G,
-                         lambda m: f"\x01\\\\i{switch_i(m.group(1))}({strip_m(m.group(2))}{LIST_SEP}{strip_m(m.group(3))}{LIST_SEP} )\x02", escaped)
-        escaped = re.sub(r'\\\\(int|sum|prod)\s*\^\s*' + G + r'\s*_\s*' + G,
-                         lambda m: f"\x01\\\\i{switch_i(m.group(1))}({strip_m(m.group(3))}{LIST_SEP}{strip_m(m.group(2))}{LIST_SEP} )\x02", escaped)
-        escaped = re.sub(r'\\\\(int|sum|prod)\s*_\s*' + G,
-                         lambda m: f"\x01\\\\i{switch_i(m.group(1))}({strip_m(m.group(2))}{LIST_SEP}{LIST_SEP} )\x02", escaped)
+        # Захватываем тело функции f(x) для интегралов и сумм, чтобы Word не рисовал пустой квадратик ("палку").
+        # Ищем до dx, dy, dt, =, либо до маркеров \x01, \x02, либо до конца строки.
+        BODY = r'\s*(.*?)(?=\s*(?:d[xyzuvtw]\b|=|\x01|\x02|$))'
 
-        # Предел \lim_{x \to 0} -> массив \a\ac\co1 (центрированный один столбец)
+        # Интегралы, суммы, произведения с пределами
+        escaped = re.sub(r'\\\\(int|sum|prod)\s*_\s*' + G + r'\s*\^\s*' + G + BODY,
+                         lambda m: make_int(m.group(1), strip_m(m.group(2)), strip_m(m.group(3)), strip_m(m.group(4))), escaped)
+        escaped = re.sub(r'\\\\(int|sum|prod)\s*\^\s*' + G + r'\s*_\s*' + G + BODY,
+                         lambda m: make_int(m.group(1), strip_m(m.group(3)), strip_m(m.group(2)), strip_m(m.group(4))), escaped)
+        escaped = re.sub(r'\\\\(int|sum|prod)\s*_\s*' + G + BODY,
+                         lambda m: make_int(m.group(1), strip_m(m.group(2)), "", strip_m(m.group(3))), escaped)
+
+        # Предел \lim_{x \to 0} -> массив \a\ac\co1 (центрированный один столбец). 
+        # Нижний предел оборачиваем в {\fs18 } для уменьшения шрифта
         escaped = re.sub(r'\\\\lim\s*_\s*' + G,
-                         lambda m: f"\x01\\\\a\\\\ac\\\\co1(lim{LIST_SEP}{strip_m(m.group(1))})\x02", escaped)
+                         lambda m: f"\x01\\\\a\\\\ac\\\\co1(lim{LIST_SEP}{{\\fs18 {strip_m(m.group(1))}}})\x02", escaped)
 
         # Степени и индексы (внутренние маркеры для отслеживания вложенности)
         escaped = re.sub(r'\^\s*' + G, '\x03' + r'\1' + '\x04', escaped)
