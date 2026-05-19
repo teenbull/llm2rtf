@@ -200,20 +200,13 @@ def generate_rtf(text):
 
     def make_int(op, lower, upper):
         # Функция-помощник: избавляет от ада бэкслешей и безопасно собирает EQ-поле.
-        cmd = r"\\i"
-        if op == 'sum': cmd += r"\\su"
-        elif op == 'prod': cmd += r"\\pr"
-        
-        # Оборачиваем пределы в RTF-группу со шрифтом 9 пунктов (\fs18).
-        # Двойные фигурные скобки {{ }} нужны для экранирования f-строки в Python.
-        l_str = f"{{\\fs18 {lower}}}" if lower else ""
-        u_str = f"{{\\fs18 {upper}}}" if upper else ""
-        
-        # Передаем обычный неразрывный пробел (\~). Нормальная высота пробела дает
-        # красивый цельный знак интеграла, а сам пробел работает как стандартный отступ.
-        body_str = r"\~"
-        
-        return f"\x01{cmd}({l_str}{LIST_SEP}{u_str}{LIST_SEP}{body_str})\x02"
+        if op == 'int':
+            # Возвращаем нативный оператор Word \i\in, оформленный в шрифте Times New Roman (\f0).
+            # Это полностью восстанавливает нормальную высоту строки в абзаце и дает аккуратный 
+            # наклонный интеграл с идеально выровненными индексами.
+            l_str = f"{lower}" if lower else ""
+            u_str = f"{upper}" if upper else ""
+            return f"{{\\f0\x01\\\\i\\\\in({l_str}{LIST_SEP}{u_str}{LIST_SEP}\\~)\x02}}"
 
     prev = None
     while escaped != prev:
@@ -337,7 +330,7 @@ def generate_rtf(text):
     escaped = escaped.replace('\n', r' \par ' + '\n')
 
     # Заголовок RTF с таблицей шрифтов (защита от кракозябр в старых Word)
-    rtf_header = r"{\rtf1\ansi\ansicpg1251\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Arial;}}\uc1\f0\fs24 "
+    rtf_header = r"{\rtf1\ansi\ansicpg1251\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Arial;}{\f2 Cambria Math;}}\uc1\f0\fs24 "
     return rtf_header + "\n" + escaped + "\n}"
 
 def set_clipboard(plain_text, rtf_text):
