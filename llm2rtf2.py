@@ -113,7 +113,7 @@ def clean_math_text(text):
         # Текстовые функции
         r'sin': 'sin', r'cos': 'cos', r'tan': 'tan', r'cot': 'cot',
         r'arcsin': 'arcsin', r'arccos': 'arccos', r'arctan': 'arctan',
-        r'ln': 'ln', r'log': 'log', r'lim': 'lim', r'max': 'max', r'min': 'min'
+        r'ln': 'ln', r'log': 'log', r'max': 'max', r'min': 'min'
     }
     for pattern, repl in replacements.items():
         # (?<![a-zA-Z]) защищает от замены внутри других слов (s\in -> s∈)
@@ -198,30 +198,25 @@ def generate_rtf(text):
                          lambda m: f"\x01\\\\r({LIST_SEP}{strip_m(m.group(1))})\x02", 
                          escaped)
         
-        # Интегралы, суммы, произведения с пределами
+        # Интегралы, суммы, произведения с пределами (пробел в конце важен, чтобы символ не схлопнулся)
         escaped = re.sub(r'\\\\(int|sum|prod)\s*_\s*' + G + r'\s*\^\s*' + G,
-                         lambda m: f"\x01\\\\i{switch_i(m.group(1))}({strip_m(m.group(2))}{LIST_SEP}{strip_m(m.group(3))}{LIST_SEP})\x02", escaped)
+                         lambda m: f"\x01\\\\i{switch_i(m.group(1))}({strip_m(m.group(2))}{LIST_SEP}{strip_m(m.group(3))}{LIST_SEP} )\x02", escaped)
         escaped = re.sub(r'\\\\(int|sum|prod)\s*\^\s*' + G + r'\s*_\s*' + G,
-                         lambda m: f"\x01\\\\i{switch_i(m.group(1))}({strip_m(m.group(3))}{LIST_SEP}{strip_m(m.group(2))}{LIST_SEP})\x02", escaped)
+                         lambda m: f"\x01\\\\i{switch_i(m.group(1))}({strip_m(m.group(3))}{LIST_SEP}{strip_m(m.group(2))}{LIST_SEP} )\x02", escaped)
         escaped = re.sub(r'\\\\(int|sum|prod)\s*_\s*' + G,
-                         lambda m: f"\x01\\\\i{switch_i(m.group(1))}({strip_m(m.group(2))}{LIST_SEP}{LIST_SEP})\x02", escaped)
+                         lambda m: f"\x01\\\\i{switch_i(m.group(1))}({strip_m(m.group(2))}{LIST_SEP}{LIST_SEP} )\x02", escaped)
 
-        # Комбинированные индексы (и верх и низ одновременно)
-        escaped = re.sub(r'_\s*' + G + r'\s*\^\s*' + G,
-                         lambda m: f"\x01\\\\s({strip_m(m.group(2))}{LIST_SEP}{strip_m(m.group(1))})\x02", escaped)
-        escaped = re.sub(r'\^\s*' + G + r'\s*_\s*' + G,
-                         lambda m: f"\x01\\\\s({strip_m(m.group(1))}{LIST_SEP}{strip_m(m.group(2))})\x02", escaped)
+        # Предел \lim_{x \to 0} -> массив \a\ac\co1 (центрированный один столбец)
+        escaped = re.sub(r'\\\\lim\s*_\s*' + G,
+                         lambda m: f"\x01\\\\a\\\\ac\\\\co1(lim{LIST_SEP}{strip_m(m.group(1))})\x02", escaped)
 
-        # Одинарные степени и индексы (используем EQ \s\up5 вместо \super для защиты от схлопывания)
-        escaped = re.sub(r'\^\s*' + G, lambda m: f"\x01\\\\s\\\\up5({strip_m(m.group(1))})\x02", escaped)
-        escaped = re.sub(r'_\s*' + G, lambda m: f"\x01\\\\s\\\\do5({strip_m(m.group(1))})\x02", escaped)
+        # Степени и индексы (внутренние маркеры для отслеживания вложенности)
+        escaped = re.sub(r'\^\s*' + G, '\x03' + r'\1' + '\x04', escaped)
+        escaped = re.sub(r'_\s*' + G, '\x05' + r'\1' + '\x06', escaped)
 
         # Очистка шрифтовых тегов
         escaped = re.sub(r'\\\\(?:mathrm|text)\s*' + G, r'\1', escaped)
         escaped = re.sub(r'\\\\(?:mathbf|textbf)\s*' + G, r'\\b \1\\b0 ', escaped)
-
-    # Восстанавливаем символы матанализа, которые остались без пределов (RTF Unicode)
-    escaped = escaped.replace(r'\\int', r'\u8747?').replace(r'\\sum', r'\u8721?').replace(r'\\prod', r'\u8719?')
         
     # Если маркеры вложены (например, дробь внутри матрицы), снимаем внутренние,
     # чтобы не спровоцировать ошибку вложенных EQ полей в Word
@@ -230,6 +225,34 @@ def generate_rtf(text):
         
     # Превращаем маркеры в полноценные поля EQ
     escaped = escaped.replace('\x01', r'{\field{\*\fldinst EQ ').replace('\x02', r'}{\fldrslt}}')
+
+    # Восстанавливаем символы матанализа без пределов
+    escaped = escaped.replace(r'\\int', '∫').replace(r'\\sum', '∑').replace(r'\\prod', '∏').replace(r'\\lim', 'lim')
+
+    # 5. Обработка степеней и индексов с учетом вложенности (чтобы не схлопывались)
+    out = []
+    sup_depth = 0
+    sub_depth = 0
+    for char in escaped:
+        if char == '\x03':
+            sup_depth += 1
+            if sup_depth == 1: out.append(r'{\super ')
+            elif sup_depth == 2: out.append(r'{\up12\fs16 ')
+            else: out.append(r'{\up18\fs12 ')
+        elif char == '\x04':
+            sup_depth -= 1
+            out.append('}')
+        elif char == '\x05':
+            sub_depth += 1
+            if sub_depth == 1: out.append(r'{\sub ')
+            elif sub_depth == 2: out.append(r'{\dn12\fs16 ')
+            else: out.append(r'{\dn18\fs12 ')
+        elif char == '\x06':
+            sub_depth -= 1
+            out.append('}')
+        else:
+            out.append(char)
+    escaped = "".join(out)
 
     # 4. Формулы $...$ превращаем в курсив
     escaped = re.sub(r'\$+(.*?)\$+', r'\\i \1\\i0 ', escaped)
