@@ -13,6 +13,7 @@ import os
 import subprocess
 
 DEBUG = False # Флаг отладки. True - включает вывод логов
+TESTRUN = True # Если True, берем текст из test.md вместо буфера обмена
 
 def get_list_separator():
     # EQ fields: разделитель ";" если десятичный разделитель в системе ",", и наоборот.
@@ -198,21 +199,30 @@ def generate_rtf(text):
     
     def strip_m(s): return s.replace('\x01', '').replace('\x02', '')
 
-    def make_int(op, lower, upper):
+    def make_int(lower, upper):
         # Функция-помощник: избавляет от ада бэкслешей и безопасно собирает EQ-поле.
-        if op == 'int':
-            # Выводим цельный символ интеграла как текст в Times New Roman (\f0\fs32) без лишнего переключателя \\i.
-            # Пределы верстаем рядом мелким шрифтом (\fs16) в компактный массив \a с интервалом \vs3.
+        sym = r'\u8747?'
+        # Выводим цельный символ интеграла как текст в Times New Roman (\f0\fs32).
+        # Пределы верстаем рядом мелким шрифтом (\fs16) в компактный массив \\a.
+        # Чтобы Word не схлопывал пустые строки в массиве, используем пробел-заглушку во втором поле.
+        l_str = f"{{\\fs16 {lower}}}" if lower else f"{{\\fs16  }}"
+        u_str = f"{{\\fs16 {upper}}}" if upper else f"{{\\fs16  }}"
+        if lower or upper:
+            return f"{{\\f0\\fs32{sym}}}\x01\\\\a\\\\co1\\\\al\\\\vs3({u_str}{LIST_SEP}{l_str})\x02"
+        else:
+            return f"{{\\f0\\fs32{sym}}}"
+
+    def make_sum_prod(op, lower, upper):
+        # Для сумм и произведений используем нативные лимиты EQ \\i \\su и \\i \\pr (сверху/снизу)
+        sw = 'su' if op == 'sum' else 'pr'
+        if lower or upper:
             l_str = f"{{\\fs16 {lower}}}" if lower else ""
             u_str = f"{{\\fs16 {upper}}}" if upper else ""
-            if u_str and l_str:
-                return f"{{\\f0\\fs32\\u8747?}}\x01\\\\a\\\\co1\\\\al\\\\vs3({u_str}{LIST_SEP}{l_str})\x02"
-            elif u_str:
-                return f"{{\\f0\\fs32\\u8747?}}\x01\\\\s\\\\up6({u_str})\x02"
-            elif l_str:
-                return f"{{\\f0\\fs32\\u8747?}}\x01\\\\s\\\\do6({l_str})\x02"
-            else:
-                return f"{{\\f0\\fs32\\u8747?}}"
+            # В нативном EQ \\i третий аргумент (интегранд) заполняем пробелом для принудительного рендеринга символа
+            return f"\x01\\\\i\\\\{sw}({l_str}{LIST_SEP}{u_str}{LIST_SEP} )\x02"
+        else:
+            sym = r'\u8721?' if op == 'sum' else r'\u8719?'
+            return f"{{\\f0\\fs32{sym}}}"
 
     prev = None
     while escaped != prev:
@@ -230,18 +240,30 @@ def generate_rtf(text):
                          lambda m: f"\x01\\\\r({LIST_SEP}{strip_m(m.group(1))})\x02", 
                          escaped)
         
-        # Интегралы, суммы, произведения с пределами
-        escaped = re.sub(r'\\\\(int|sum|prod)\s*_\s*' + G + r'\s*\^\s*' + G,
-                         lambda m: make_int(m.group(1), strip_m(m.group(2)), strip_m(m.group(3))), escaped)
-        escaped = re.sub(r'\\\\(int|sum|prod)\s*\^\s*' + G + r'\s*_\s*' + G,
-                         lambda m: make_int(m.group(1), strip_m(m.group(3)), strip_m(m.group(2))), escaped)
-        escaped = re.sub(r'\\\\(int|sum|prod)\s*_\s*' + G,
-                         lambda m: make_int(m.group(1), strip_m(m.group(2)), ""), escaped)
+        # Интегралы с пределами
+        escaped = re.sub(r'\\\\int\s*_\s*' + G + r'\s*\^\s*' + G,
+                         lambda m: make_int(strip_m(m.group(1)), strip_m(m.group(2))), escaped)
+        escaped = re.sub(r'\\\\int\s*\^\s*' + G + r'\s*_\s*' + G,
+                         lambda m: make_int(strip_m(m.group(2)), strip_m(m.group(1))), escaped)
+        escaped = re.sub(r'\\\\int\s*_\s*' + G,
+                         lambda m: make_int(strip_m(m.group(1)), ""), escaped)
+        escaped = re.sub(r'\\\\int\s*\^\s*' + G,
+                         lambda m: make_int("", strip_m(m.group(1))), escaped)
+
+        # Суммы и произведения с пределами
+        escaped = re.sub(r'\\\\(sum|prod)\s*_\s*' + G + r'\s*\^\s*' + G,
+                         lambda m: make_sum_prod(m.group(1), strip_m(m.group(2)), strip_m(m.group(3))), escaped)
+        escaped = re.sub(r'\\\\(sum|prod)\s*\^\s*' + G + r'\s*_\s*' + G,
+                         lambda m: make_sum_prod(m.group(1), strip_m(m.group(3)), strip_m(m.group(2))), escaped)
+        escaped = re.sub(r'\\\\(sum|prod)\s*_\s*' + G,
+                         lambda m: make_sum_prod(m.group(1), strip_m(m.group(2)), ""), escaped)
+        escaped = re.sub(r'\\\\(sum|prod)\s*\^\s*' + G,
+                         lambda m: make_sum_prod(m.group(1), "", strip_m(m.group(2))), escaped)
 
         # Предел \lim_{x \to 0} -> массив \a\ac\co1 (центрированный один столбец). 
         # Нижний предел оборачиваем в {\fs18 } для уменьшения шрифта
         escaped = re.sub(r'\\\\lim\s*_\s*' + G,
-                         lambda m: f"\x01\\\\a\\\\ac\\\\co1(lim{LIST_SEP}{{\\fs18 {strip_m(m.group(1))}}})\x02", escaped)
+                         lambda m: f"\x01\\\\a\\\\ac\\\\co1({{\\fs18  }}{LIST_SEP}lim{LIST_SEP}{{\\fs18 {strip_m(m.group(1))}}})\x02", escaped)
 
         # Степени и индексы (внутренние маркеры для отслеживания вложенности)
         escaped = re.sub(r'\^\s*' + G, '\x03' + r'\1' + '\x04', escaped)
@@ -260,7 +282,9 @@ def generate_rtf(text):
     escaped = escaped.replace('\x01', r'{\field{\*\fldinst EQ ').replace('\x02', r'}{\fldrslt}}')
 
     # Fallback: \int/\sum/\prod без пределов — они не попали в EQ switch, отдаем Unicode
-    escaped = escaped.replace(r'\\int', '∫').replace(r'\\sum', '∑').replace(r'\\prod', '∏').replace(r'\\lim', 'lim')
+    escaped = re.sub(r'\\\\int(?![a-zA-Z])', lambda m: make_int("", ""), escaped)
+    escaped = re.sub(r'\\\\(sum|prod)(?![a-zA-Z])', lambda m: make_sum_prod(m.group(1), "", ""), escaped)
+    escaped = escaped.replace(r'\\lim', 'lim')
 
     # 4. Формулы $...$ превращаем в курсив
     escaped = re.sub(r'\$+(.*?)\$+', r'\\i \1\\i0 ', escaped)
@@ -390,9 +414,19 @@ def set_clipboard(plain_text, rtf_text):
             os.system(f'xdg-open "{filename}"')
 
 def main():
-    raw_text = get_clipboard_text()
+    if TESTRUN:
+        try:
+            with open("test.md", "r", encoding="utf-8") as f:
+                raw_text = f.read()
+            print("[*] TESTRUN включен: чтение данных из test.md")
+        except FileNotFoundError:
+            print("Ошибка: Файл test.md не найден.")
+            return
+    else:
+        raw_text = get_clipboard_text()
+
     if not raw_text.strip():
-        print("Ошибка: Буфер обмена пуст или не содержит текста.")
+        print("Ошибка: Нет текста для обработки (файл или буфер пусты).")
         return
 
     raw_kb = len(raw_text.encode('utf-8')) / 1024
