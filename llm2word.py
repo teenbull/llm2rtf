@@ -80,10 +80,10 @@ def clean_math_text(text):
             env, content = m.group(1), m.group(2)
             content = content.strip()
             if 'matrix' in env:
-                # создаем матрицу EQ \a с отступами \vs3 и \hs3 для читаемости
+                # создаем матрицу EQ \a с отступами \vs4 и \hs10 для читаемости
                 cols = content.split(r'\\')[0].count('&') + 1
                 items = [c.strip() for c in re.split(r'\\\\|&', content)]
-                return f"\x01\\b\\bc\\[(\\a\\ac\\vs3\\hs3\\co{cols}(" + LIST_SEP.join(items) + "))\x02"
+                return f"\x01\\b\\bc\\[(\\a\\ac\\vs4\\hs10\\co{cols}(" + LIST_SEP.join(items) + "))\x02"
             elif 'cases' in env:
                 # Системы уравнений объединяем одной левой скобкой (\lc\{)
                 items = [c.strip() for c in re.split(r'\\\\', content)]
@@ -144,7 +144,6 @@ def clean_math_text(text):
 
     # 3. Степени и градусы
     text = re.sub(r'\^\{?(?:\\?circ|°)\}?', '°', text)
-    text = re.sub(r'(\d+)\^([^\w\d]|$)', r'\1°\2', text)
     
     # Приводим индексы к единому формату ^{x} для последующего парсинга
     # (перевод простых цифр в Unicode мы теперь делаем в генераторе RTF, 
