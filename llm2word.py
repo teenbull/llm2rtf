@@ -136,9 +136,10 @@ def clean_math_text(text):
     for pattern, repl in replacements.items():
         # (?<![a-zA-Z]) защищает от замены внутри других слов (s\in -> s∈)
         # (?![a-zA-Z]) разрешает замену, если дальше идет _, ^, ( - то есть не буква. Это чинит \int_a^b!
-        # \to опасен без слеша (слово "to"), поэтому для него слеш обязателен
-        if pattern == r'to':
-            text = re.sub(r'(?<![a-zA-Z])\\to(?![a-zA-Z])', repl, text)
+        # Для общеупотребительных слов (to, in, times, cup, cap, angle, pm) требуем бэкслеш,
+        # чтобы они не ломали обычный английский текст (например, a cup of tea -> a ∪ of tea)
+        if pattern in (r'to', r'in', r'times', r'cup', r'cap', r'angle', r'pm'):
+            text = re.sub(rf'(?<![a-zA-Z])\\{pattern}(?![a-zA-Z])', repl, text)
         else:
             text = re.sub(rf'(?<![a-zA-Z])\\?{pattern}(?![a-zA-Z])', repl, text)
 
@@ -190,10 +191,69 @@ def generate_rtf(text):
     escaped = re.sub(r'\*\*(.*?)\*\*', r'\\b \1\\b0 ', escaped)
     escaped = re.sub(r'\*(.*?)\*', r'\\i \1\\i0 ', escaped)
 
+    # 2.5 Таблицы Markdown (выполняем до удаления знаков $ формул во избежание ложного разбиения ячеек)
+    def rtf_table_replacer(match):
+        lines = match.group(0).strip().split('\n')
+        rtf_out = []
+        for line in lines:
+            # Пропускаем Markdown-разделитель (например, |---|---|)
+            if re.match(r'^[ \t]*\|(?:[-: ]+\|)+[ \t]*$', line):
+                continue
+            
+            # Парсим ячейки, удаляя крайние пайпы и сохраняя знаки модуля |...| внутри математики
+            line_str = line.strip()
+            if line_str.startswith('|'): line_str = line_str[1:]
+            if line_str.endswith('|'): line_str = line_str[:-1]
+            
+            cells = []
+            current = []
+            in_math = False
+            escaped_char = False
+            for char in line_str:
+                if escaped_char:
+                    current.append(char)
+                    escaped_char = False
+                    continue
+                if char == '\\':
+                    current.append(char)
+                    escaped_char = True
+                    continue
+                if char == '$':
+                    in_math = not in_math
+                if char == '|' and not in_math:
+                    cells.append(''.join(current).strip())
+                    current = []
+                else:
+                    current.append(char)
+            cells.append(''.join(current).strip())
+            if not cells: continue
+            
+            num_cols = len(cells)
+            # 9000 твипов — это примерно 16 см (на всю ширину листа А4)
+            cell_width = 9000 // num_cols 
+            
+            # \trowd = начало строки таблицы
+            row_def = "\\trowd\\trgaph108\\trleft-108 "
+            for i in range(num_cols):
+                # Рисуем рамки: верх (t), лево (l), низ (b), право (r) и задаем ширину ячейки (\cellx)
+                row_def += f"\\clbrdrt\\brdrs\\brdrw10 \\clbrdrl\\brdrs\\brdrw10 \\clbrdrb\\brdrs\\brdrw10 \\clbrdrr\\brdrs\\brdrw10 \\cellx{(i+1)*cell_width} "
+            
+            # Собираем контент ячеек и закрываем строку (\row)
+            row_content = " ".join(f"{c} \\cell" for c in cells)
+            rtf_out.append(f"{row_def} {row_content} \\row")
+        
+        # Оборачиваем таблицу в \pard (сброс абзаца). 
+        # Внутри нет символов \n, чтобы следующий шаг не сломал RTF-код.
+        # Обязательно добавляем \n в конце, так как регулярка съела его при поиске
+        return " \\pard " + " ".join(rtf_out) + " \\pard " + "\n"
+
+    # Ищем блоки, где от 2 строк и больше начинаются и заканчиваются на пайп "|"
+    escaped = re.sub(r'(?:^[ \t]*\|.*\|[ \t]*(?:\n|$)){2,}', rtf_table_replacer, escaped, flags=re.MULTILINE)
+
     # 3. Парсинг математики (дроби, корни, интегралы) изнутри-наружу через маркеры \x01 \x02
-    # Идея (трюк): вместо создания вложенных RTF полей {\field...}, мы сворачиваем
+    # Вместо создания вложенных RTF полей {\field...}, мы сворачиваем
     # внутренние формулы в \f(a;b) и удаляем у них маркеры, собирая всё в один общий EQ field.
-    nb = r'(?:(?!\\[{}]).)*?'  # Жестко запрещаем экранированные скобки \{ и \} внутри аргументов
+    nb = r'(?:(?!\\[{}]).)*?'  # Запрещаем экранированные скобки \{ и \} внутри аргументов
     G = r'\\\{(' + nb + r')\\\}'
     
     def strip_m(s): return s.replace('\x01', '').replace('\x02', '')
@@ -319,66 +379,10 @@ def generate_rtf(text):
         prev = escaped
         escaped = re.sub(r'(?<!\\)\\{(' + nb + r')(?<!\\)\}', r'\1', escaped)
 
-    # 7. Таблицы Markdown
-    def rtf_table_replacer(match):
-        lines = match.group(0).strip().split('\n')
-        rtf_out = []
-        for line in lines:
-            # Пропускаем Markdown-разделитель (например, |---|---|)
-            if re.match(r'^[ \t]*\|(?:[-: ]+\|)+[ \t]*$', line):
-                continue
-            
-            # Парсим ячейки, удаляя крайние пайпы и сохраняя знаки модуля |...| внутри математики
-            line_str = line.strip()
-            if line_str.startswith('|'): line_str = line_str[1:]
-            if line_str.endswith('|'): line_str = line_str[:-1]
-            
-            cells = []
-            current = []
-            in_math = False
-            escaped = False
-            for char in line_str:
-                if escaped:
-                    current.append(char)
-                    escaped = False
-                    continue
-                if char == '\\':
-                    current.append(char)
-                    escaped = True
-                    continue
-                if char == '$':
-                    in_math = not in_math
-                if char == '|' and not in_math:
-                    cells.append(''.join(current).strip())
-                    current = []
-                else:
-                    current.append(char)
-            cells.append(''.join(current).strip())
-            if not cells: continue
-            
-            num_cols = len(cells)
-            # 9000 твипов — это примерно 16 см (на всю ширину листа А4)
-            cell_width = 9000 // num_cols 
-            
-            # \trowd = начало строки таблицы
-            row_def = "\\trowd\\trgaph108\\trleft-108 "
-            for i in range(num_cols):
-                # Рисуем рамки: верх (t), лево (l), низ (b), право (r) и задаем ширину ячейки (\cellx)
-                row_def += f"\\clbrdrt\\brdrs\\brdrw10 \\clbrdrl\\brdrs\\brdrw10 \\clbrdrb\\brdrs\\brdrw10 \\clbrdrr\\brdrs\\brdrw10 \\cellx{(i+1)*cell_width} "
-            
-            # Собираем контент ячеек и закрываем строку (\row)
-            row_content = " ".join(f"{c} \\cell" for c in cells)
-            rtf_out.append(f"{row_def} {row_content} \\row")
-        
-        # Оборачиваем таблицу в \pard (сброс абзаца). 
-        # Внутри нет символов \n, чтобы следующий шаг не сломал RTF-код.
-        # Обязательно добавляем \n в конце, так как регулярка "съела" его при поиске!
-        return r" \pard " + " ".join(rtf_out) + r" \pard " + "\n"
-
     # Ищем блоки, где от 2 строк и больше начинаются и заканчиваются на пайп "|"
     escaped = re.sub(r'(?:^[ \t]*\|.*\|[ \t]*(?:\n|$)){2,}', rtf_table_replacer, escaped, flags=re.MULTILINE)
 
-    # 8. Переносы строк
+    # 7. Переносы строк
     escaped = escaped.replace('\n', r' \par ' + '\n')
 
     # Заголовок RTF с таблицей шрифтов (защита от кракозябр в старых Word)
