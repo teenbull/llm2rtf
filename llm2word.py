@@ -319,7 +319,7 @@ def generate_rtf(text):
     prev = None
     while escaped != prev:
         prev = escaped
-        escaped = re.sub(r'\\\{(' + nb + r')\\\}', r'\1', escaped)
+        escaped = re.sub(r'(?<!\\)\\{(' + nb + r')(?<!\\)\}', r'\1', escaped)
 
     # 7. Таблицы Markdown
     def rtf_table_replacer(match):
@@ -330,8 +330,32 @@ def generate_rtf(text):
             if re.match(r'^[ \t]*\|(?:[-: ]+\|)+[ \t]*$', line):
                 continue
             
-            # Парсим ячейки, удаляя крайние пайпы
-            cells = [c.strip() for c in line.strip().strip('|').split('|')]
+            # Парсим ячейки, удаляя крайние пайпы и сохраняя знаки модуля |...| внутри математики
+            line_str = line.strip()
+            if line_str.startswith('|'): line_str = line_str[1:]
+            if line_str.endswith('|'): line_str = line_str[:-1]
+            
+            cells = []
+            current = []
+            in_math = False
+            escaped = False
+            for char in line_str:
+                if escaped:
+                    current.append(char)
+                    escaped = False
+                    continue
+                if char == '\\':
+                    current.append(char)
+                    escaped = True
+                    continue
+                if char == '$':
+                    in_math = not in_math
+                if char == '|' and not in_math:
+                    cells.append(''.join(current).strip())
+                    current = []
+                else:
+                    current.append(char)
+            cells.append(''.join(current).strip())
             if not cells: continue
             
             num_cols = len(cells)
