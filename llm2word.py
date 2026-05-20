@@ -295,17 +295,17 @@ def generate_rtf(text):
     for char in escaped:
         if char == '\x03':
             sup_depth += 1
-            if sup_depth == 1: out.append(r'{\super ')
-            elif sup_depth == 2: out.append(r'{\up12\fs16 ')
-            else: out.append(r'{\up18\fs12 ')
+            if sup_depth == 1: out.append(r'{\super\u8201?')
+            elif sup_depth == 2: out.append(r'{\up12\fs16\u8201?')
+            else: out.append(r'{\up18\fs12\u8201?')
         elif char == '\x04':
             sup_depth -= 1
             out.append('}')
         elif char == '\x05':
             sub_depth += 1
-            if sub_depth == 1: out.append(r'{\sub ')
-            elif sub_depth == 2: out.append(r'{\dn12\fs16 ')
-            else: out.append(r'{\dn18\fs12 ')
+            if sub_depth == 1: out.append(r'{\sub\u8201?')
+            elif sub_depth == 2: out.append(r'{\dn12\fs16\u8201?')
+            else: out.append(r'{\dn18\fs12\u8201?')
         elif char == '\x06':
             sub_depth -= 1
             out.append('}')
