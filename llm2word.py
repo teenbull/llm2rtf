@@ -14,6 +14,7 @@ import subprocess
 
 DEBUG = False # Флаг отладки. True - включает вывод логов
 TESTRUN = True # Если True, берем текст из test.md вместо буфера обмена
+EMOJI = False # Если True, поддерживаем эмодзи через суррогатные пары (нормально не тестил). Если False - вырезаем (по умолчанию)
 
 def get_list_separator():
     # EQ fields: разделитель ";" если десятичный разделитель в системе ",", и наоборот.
@@ -173,12 +174,19 @@ def generate_rtf(text):
             escaped += f"\\{char}"
         elif ord(char) > 127:
             code = ord(char)
-            # RTF требует 16-битные signed int. Обходим краш Word'а на символах > 32767
-            if 32767 < code <= 65535:
-                code -= 65536
-            elif code > 65535:
-                code = 63 # Заглушка '?' для эмодзи
-            escaped += f"\\u{code}?"
+            if code > 65535:
+                if not EMOJI:
+                    continue
+                # вычисляем суррогатные пары для эмодзи (символы за пределами BMP)
+                code -= 0x10000
+                w1 = 0xD800 + (code >> 10)
+                w2 = 0xDC00 + (code & 0x3FF)
+                escaped += f"\\u{w1 - 65536}?\\u{w2 - 65536}?"
+            else:
+                # RTF требует 16-битные signed int. Обходим краш Word'а на символах > 32767
+                if code > 32767:
+                    code -= 65536
+                escaped += f"\\u{code}?"
         else: 
             escaped += char
 
