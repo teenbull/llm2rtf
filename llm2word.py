@@ -13,7 +13,7 @@ import os
 import subprocess
 
 DEBUG = False # Флаг отладки. True - включает вывод логов
-TESTRUN = True # Если True, берем текст из test.md вместо буфера обмена
+TESTRUN = False # Если True, берем текст из test.md вместо буфера обмена
 EMOJI = False # Если True, поддерживаем эмодзи через суррогатные пары (нормально не тестил). Если False - вырезаем (по умолчанию)
 
 def get_list_separator():
