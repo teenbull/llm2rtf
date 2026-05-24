@@ -5,13 +5,30 @@ import subprocess
 
 def get_clipboard_text():
     if sys.platform == "win32":
-        import ctypes
+        import ctypes, time
         user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
-        if not user32.OpenClipboard(0): return ""
+        
+        # фикс усечения 64-битных указателей и аргументов
+        user32.GetClipboardData.argtypes = [ctypes.c_uint]
+        user32.GetClipboardData.restype = ctypes.c_void_p
+        kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+        
+        # защита от гонки процессов (буфер может быть занят другой программой)
+        for _ in range(5):
+            if user32.OpenClipboard(0): break
+            time.sleep(0.01)
+        else: return ""
+        
         try:
             if not user32.IsClipboardFormatAvailable(13): return "" # 13 = CF_UNICODETEXT
             handle = user32.GetClipboardData(13)
+            if not handle: return ""
+            
             ptr = kernel32.GlobalLock(handle)
+            if not ptr: return ""
+            
             text = ctypes.c_wchar_p(ptr).value
             kernel32.GlobalUnlock(handle)
             return text or ""
@@ -240,14 +257,26 @@ def generate_rtf(text):
 
 def set_clipboard(plain_text, rtf_text):
     if sys.platform == "win32":
-        import ctypes
-        user32 = ctypes.windll.user32
-        kernel32 = ctypes.windll.kernel32
+        import ctypes, time
+        user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+        
+        # фикс усечения 64-битных указателей и аргументов
+        kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+        kernel32.GlobalAlloc.restype = ctypes.c_void_p
+        kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+        user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
 
         CF_RTF = user32.RegisterClipboardFormatW("Rich Text Format")
         CF_UNICODETEXT = 13
 
-        user32.OpenClipboard(0)
+        # защита от гонки процессов
+        for _ in range(5):
+            if user32.OpenClipboard(0): break
+            time.sleep(0.01)
+        else: return
+
         user32.EmptyClipboard()
 
         rtf_bytes = rtf_text.encode('ascii')
